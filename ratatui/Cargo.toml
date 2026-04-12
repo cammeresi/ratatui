@@ -24,9 +24,17 @@ rustdoc-args = ["--cfg", "docsrs"]
 #!
 ## By default, we enable the crossterm backend as this is a reasonable choice for most applications
 ## as it is supported on Linux/Mac/Windows systems. We also enable the `underline-color` feature
-## which allows you to set the underline color of text, the `macros` feature which provides
-## some useful macros and `layout-cache` which speeds up layout cache calculations.
-default = ["all-widgets", "crossterm", "layout-cache", "macros", "underline-color"]
+## which allows you to set the underline color of text, the `hyperlinks` feature which enables
+## OSC 8 hyperlinks, the `macros` feature which provides some useful macros and `layout-cache`
+## which speeds up layout cache calculations.
+default = [
+  "all-widgets",
+  "crossterm",
+  "hyperlinks",
+  "layout-cache",
+  "macros",
+  "underline-color",
+]
 #! Generally an application will only use one backend, so you should only enable one of the following features:
 ## enables the [`CrosstermBackend`](backend::CrosstermBackend) backend and adds a dependency on [`crossterm`].
 crossterm = ["dep:ratatui-crossterm", "std"]
@@ -98,6 +106,15 @@ underline-color = [
   "ratatui-crossterm?/underline-color",
   "ratatui-termina?/underline-color",
   "ratatui-termwiz?/underline-color",
+]
+
+## Enables OSC 8 hyperlink support on cells, buffers, spans, lines, and text.
+## Hyperlinks are only emitted by the Crossterm backend (crossterm 0.29). Other backends ignore
+## them.
+hyperlinks = [
+  "ratatui-core/hyperlinks",
+  "ratatui-crossterm?/hyperlinks",
+  "ratatui-widgets/hyperlinks",
 ]
 
 #! The following features are unstable and may change in the future:
