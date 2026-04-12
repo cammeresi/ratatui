@@ -9,7 +9,7 @@ use core::fmt;
 use unicode_truncate::UnicodeTruncateStr;
 use unicode_width::UnicodeWidthStr;
 
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, make_hyperlink};
 use crate::layout::{Alignment, Rect};
 use crate::style::{Style, Styled};
 use crate::text::{Span, StyledGrapheme, Text};
@@ -342,6 +342,31 @@ impl<'a> Line<'a> {
     #[must_use = "method moves the value of self and returns the modified value"]
     pub fn style<S: Into<Style>>(mut self, style: S) -> Self {
         self.style = style.into();
+        self
+    }
+
+    /// Sets the hyperlink URL for every [`Span`] in this line.
+    ///
+    /// This is a convenience method that applies the same hyperlink to all child spans.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use ratatui_core::text::Line;
+    ///
+    /// let line = Line::from("click me").hyperlink(Some("https://example.com"));
+    /// let plain = Line::from("plain text").hyperlink(None::<&str>);
+    /// ```
+    #[must_use = "method moves the value of self and returns the modified value"]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn hyperlink<U>(mut self, url: Option<U>) -> Self
+    where
+        U: AsRef<str>,
+    {
+        let link = make_hyperlink(url.as_ref().map(AsRef::as_ref));
+        for span in &mut self.spans {
+            span.hyperlink.clone_from(&link);
+        }
         self
     }
 
