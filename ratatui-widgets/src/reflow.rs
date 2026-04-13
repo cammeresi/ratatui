@@ -292,23 +292,23 @@ where
             lines_exhausted = false;
             current_alignment = *alignment;
 
-            for StyledGrapheme { symbol, style } in current_line {
+            for grapheme in current_line {
                 // Ignore characters wider that the total max width.
-                if symbol.cell_width() > self.max_line_width {
+                if grapheme.symbol.cell_width() > self.max_line_width {
                     continue;
                 }
 
-                if current_line_width + symbol.cell_width() > self.max_line_width {
+                if current_line_width + grapheme.symbol.cell_width() > self.max_line_width {
                     // Truncate line
                     break;
                 }
 
                 let symbol = if horizontal_offset == 0 || Alignment::Left != *alignment {
-                    symbol
+                    grapheme.symbol
                 } else {
-                    let w = symbol.cell_width();
+                    let w = grapheme.symbol.cell_width();
                     if w > horizontal_offset {
-                        let t = trim_offset(symbol, horizontal_offset);
+                        let t = trim_offset(grapheme.symbol, horizontal_offset);
                         horizontal_offset = 0;
                         t
                     } else {
@@ -317,7 +317,8 @@ where
                     }
                 };
                 current_line_width += symbol.cell_width();
-                self.current_line.push(StyledGrapheme { symbol, style });
+                self.current_line
+                    .push(StyledGrapheme { symbol, ..grapheme });
             }
         }
 

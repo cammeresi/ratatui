@@ -8,6 +8,8 @@ mod cell_width;
 mod diff;
 
 pub use buffer::Buffer;
+#[cfg(feature = "hyperlinks")]
+pub(crate) use cell::make_hyperlink;
 pub use cell::{Cell, CellDiffOption};
 pub use cell_width::CellWidth;
 pub use diff::BufferDiff;
