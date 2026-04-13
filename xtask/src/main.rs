@@ -22,6 +22,7 @@ mod commands;
 /// default features for ratatui-crossterm, but with `--no-default-features`, we must add it
 /// explicitly if desired.
 const CROSSTERM_COMMON_FEATURES: &[&str] = &[
+    "hyperlinks",
     "serde",
     "underline-color",
     "scrolling-regions",
