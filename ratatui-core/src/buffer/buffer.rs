@@ -1,10 +1,12 @@
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::ops::{Index, IndexMut};
+use core::ops::{Index, IndexMut, Range};
 use core::{cmp, fmt};
 
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::buffer::cell::make_hyperlink;
 use crate::buffer::{BufferDiff, Cell, CellWidth};
 use crate::layout::{Position, Rect};
 use crate::style::Style;
@@ -335,11 +337,44 @@ impl Buffer {
     /// Use [`Buffer::set_string`] when the maximum amount of characters can be printed.
     pub fn set_stringn<T, S>(
         &mut self,
+        x: u16,
+        y: u16,
+        string: T,
+        max_width: usize,
+        style: S,
+    ) -> (u16, u16)
+    where
+        T: AsRef<str>,
+        S: Into<Style>,
+    {
+        self.set_stringn_with_hyperlink(x, y, string, max_width, style, None)
+    }
+
+    /// Sets or removes a hyperlink URL for a range of flat cell indices.
+    ///
+    /// Only the crossterm backend currently emits hyperlink (OSC 8) sequences.
+    pub fn set_hyperlink(&mut self, range: Range<usize>, url: Option<&str>) {
+        let link = make_hyperlink(url);
+        let end = range.end.min(self.content.len());
+        let start = range.start.min(end);
+        for cell in &mut self.content[start..end] {
+            cell.set_hyperlink_arc(link.clone());
+        }
+    }
+
+    /// Returns the hyperlink URL at the given flat cell index, if any.
+    pub fn hyperlink(&self, index: usize) -> Option<&str> {
+        self.content.get(index)?.hyperlink()
+    }
+
+    fn set_stringn_with_hyperlink<T, S>(
+        &mut self,
         mut x: u16,
         y: u16,
         string: T,
         max_width: usize,
         style: S,
+        link: Option<&Arc<str>>,
     ) -> (u16, u16)
     where
         T: AsRef<str>,
@@ -357,12 +392,15 @@ impl Buffer {
             });
         let style = style.into();
         for (symbol, width) in graphemes {
-            self[(x, y)].set_symbol(symbol).set_style(style);
+            let idx = self.index_of(x, y);
+            self.content[idx].set_symbol(symbol).set_style(style);
+            self.content[idx].set_hyperlink_arc(link.cloned());
             let next_symbol = x + width;
             x += 1;
             // Reset following cells if multi-width (they would be hidden by the grapheme),
             while x < next_symbol {
-                self[(x, y)].reset();
+                let idx = self.index_of(x, y);
+                self.content[idx].reset();
                 x += 1;
             }
         }
@@ -377,12 +415,13 @@ impl Buffer {
             if remaining_width == 0 {
                 break;
             }
-            let pos = self.set_stringn(
+            let pos = self.set_stringn_with_hyperlink(
                 x,
                 y,
                 span.content.as_ref(),
                 remaining_width as usize,
                 line.style.patch(span.style),
+                None,
             );
             let w = pos.0.saturating_sub(x);
             x = pos.0;
@@ -393,7 +432,7 @@ impl Buffer {
 
     /// Print a span, starting at the position (x, y)
     pub fn set_span(&mut self, x: u16, y: u16, span: &Span<'_>, max_width: u16) -> (u16, u16) {
-        self.set_stringn(x, y, &span.content, max_width as usize, span.style)
+        self.set_stringn_with_hyperlink(x, y, &span.content, max_width as usize, span.style, None)
     }
 
     /// Set the style of all cells in the given area.
@@ -1243,6 +1282,39 @@ mod tests {
         let two = Buffer::filled(two, Cell::new("2"));
         one.merge(&two);
         assert_eq!(one, Buffer::with_lines(expected));
+    }
+
+    #[test]
+    fn merge_hyperlinks_in_overlapping_region() {
+        let mut a = Buffer::with_lines(["docs"]);
+        a.set_hyperlink(0..4, Some("https://a.com"));
+
+        let mut b = Buffer::empty(Rect::new(2, 0, 4, 1));
+        b.set_string(2, 0, "link", Style::default());
+        b.set_hyperlink(0..4, Some("https://b.com"));
+
+        a.merge(&b);
+
+        // "do" retains a's link.
+        assert_eq!(a.hyperlink(0), Some("https://a.com"));
+        assert_eq!(a.hyperlink(1), Some("https://a.com"));
+        // "link" is overwritten by b's cells with b's link.
+        for i in 2..6 {
+            assert_eq!(a.hyperlink(i), Some("https://b.com"));
+        }
+        let expected: String = a.content.iter().map(Cell::symbol).collect();
+        assert_eq!(expected, "dolink");
+    }
+
+    #[test]
+    fn overwrite_clears_stale_hyperlink() {
+        let mut buf = Buffer::with_lines(["abc"]);
+        buf.set_hyperlink(0..3, Some("https://example.com"));
+
+        buf.set_string(0, 0, "xyz", Style::default());
+        for i in 0..3 {
+            assert_eq!(buf.hyperlink(i), None);
+        }
     }
 
     #[test]

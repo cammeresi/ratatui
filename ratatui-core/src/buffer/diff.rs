@@ -3,15 +3,16 @@ use crate::layout::Rect;
 
 /// A zero-allocation iterator over the differences between two buffers of the same width.
 ///
-/// Yields `(x, y, &Cell)` tuples for each cell in `next` that differs from the corresponding cell
-/// in `prev`. Handles multi-width characters (including VS16 emoji trailing cells) and
+/// Yields `(x, y, &Cell)` tuples for each cell in `next` that differs from the
+/// corresponding cell in `prev`.
+/// Handles multi-width characters (including VS16 emoji trailing cells) and
 /// [`CellDiffOption`] directives.
 #[derive(Debug)]
 pub struct BufferDiff<'prev, 'next> {
-    /// The next (current) buffer's cells.
-    next: &'next [Cell],
-    /// The previous buffer's cells.
-    prev: &'prev [Cell],
+    /// The next (current) buffer.
+    next: &'next Buffer,
+    /// The previous buffer.
+    prev: &'prev Buffer,
     /// Buffer width (for `pos_of` calculation).
     area: Rect,
     /// Current position in the flat cell array.
@@ -49,8 +50,8 @@ impl<'prev, 'next> BufferDiff<'prev, 'next> {
         area.height = area.height.min(next.area.height);
 
         Self {
-            next: &next.content,
-            prev: &prev.content,
+            next,
+            prev,
             area,
             pos: 0,
             trailing: None,
@@ -86,9 +87,11 @@ impl<'next> Iterator for BufferDiff<'_, 'next> {
                 // The style of hidden trailing cells is not visible, so style
                 // differences alone should not trigger updates that can cause
                 // cursor positioning issues on some terminals.
-                if !is_skip(&self.next[j]) && self.prev[j].symbol() != self.next[j].symbol() {
+                if !is_skip(&self.next.content[j])
+                    && self.prev.content[j].symbol() != self.next.content[j].symbol()
+                {
                     let (tx, ty) = self.pos_of(j);
-                    return Some((tx, ty, &self.next[j]));
+                    return Some((tx, ty, &self.next.content[j]));
                 }
             }
 
@@ -97,13 +100,13 @@ impl<'next> Iterator for BufferDiff<'_, 'next> {
             self.trailing = None;
         }
 
-        let len = self.next.len().min(self.prev.len());
+        let len = self.next.content.len().min(self.prev.content.len());
         while self.pos < len {
             let i = self.pos;
             self.pos += 1;
 
-            let current = &self.next[i];
-            let previous = &self.prev[i];
+            let current = &self.next.content[i];
+            let previous = &self.prev.content[i];
 
             match current.diff_option {
                 CellDiffOption::Skip => {}
@@ -113,7 +116,7 @@ impl<'next> Iterator for BufferDiff<'_, 'next> {
                     self.pos += width.get().saturating_sub(1) as usize;
                     if current != previous {
                         let (x, y) = self.pos_of(i);
-                        return Some((x, y, &self.next[i]));
+                        return Some((x, y, &self.next.content[i]));
                     }
                 }
                 CellDiffOption::None => {
@@ -150,7 +153,7 @@ impl<'next> Iterator for BufferDiff<'_, 'next> {
                     }
 
                     let (x, y) = self.pos_of(i);
-                    return Some((x, y, &self.next[i]));
+                    return Some((x, y, &self.next.content[i]));
                 }
             }
         }
@@ -283,6 +286,47 @@ mod tests {
             .collect();
 
         assert_eq!(diff, "x");
+    }
+
+    #[test]
+    fn hyperlink_only_diff() {
+        let prev = Buffer::with_lines(["abc"]);
+        let mut next = Buffer::with_lines(["abc"]);
+        next.set_hyperlink(0..1, Some("https://example.com"));
+
+        let diff: Vec<_> = BufferDiff::new(&prev, &next).collect();
+        assert_eq!(diff.len(), 1);
+        let (x, y, cell) = &diff[0];
+        assert_eq!((*x, *y), (0, 0));
+        assert_eq!(cell.symbol(), "a");
+        assert_eq!(cell.hyperlink(), Some("https://example.com"));
+    }
+
+    #[test]
+    fn hyperlink_cleared_diff() {
+        let mut prev = Buffer::with_lines(["abc"]);
+        prev.set_hyperlink(0..1, Some("https://example.com"));
+        let next = Buffer::with_lines(["abc"]);
+
+        let diff: Vec<_> = BufferDiff::new(&prev, &next).collect();
+        assert_eq!(diff.len(), 1);
+        let (x, y, cell) = &diff[0];
+        assert_eq!((*x, *y), (0, 0));
+        assert_eq!(cell.symbol(), "a");
+        assert_eq!(cell.hyperlink(), None);
+    }
+
+    #[test]
+    fn vs16_emoji_hyperlink_diff() {
+        let prev = Buffer::with_lines(["⌨️ab"]);
+        let mut next = Buffer::with_lines(["⌨️ab"]);
+        next.set_hyperlink(0..1, Some("https://example.com"));
+
+        let diff: Vec<_> = BufferDiff::new(&prev, &next).collect();
+        assert_eq!(diff.len(), 1);
+        let (x, _, cell) = &diff[0];
+        assert_eq!(*x, 0);
+        assert_eq!(cell.hyperlink(), Some("https://example.com"));
     }
 
     #[test]
