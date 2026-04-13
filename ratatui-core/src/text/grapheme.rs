@@ -1,3 +1,6 @@
+#[cfg(feature = "hyperlinks")]
+use alloc::sync::Arc;
+
 use crate::style::{Style, Styled};
 
 const NBSP: &str = "\u{00a0}";
@@ -12,6 +15,11 @@ const ZWSP: &str = "\u{200b}";
 pub struct StyledGrapheme<'a> {
     pub symbol: &'a str,
     pub style: Style,
+    /// The hyperlink URL (OSC 8) for this grapheme.
+    ///
+    /// Only the crossterm backend currently emits hyperlink sequences.
+    #[cfg(feature = "hyperlinks")]
+    pub hyperlink: Option<&'a Arc<str>>,
 }
 
 impl<'a> StyledGrapheme<'a> {
@@ -25,7 +33,16 @@ impl<'a> StyledGrapheme<'a> {
         Self {
             symbol,
             style: style.into(),
+            #[cfg(feature = "hyperlinks")]
+            hyperlink: None,
         }
+    }
+
+    #[cfg(feature = "hyperlinks")]
+    #[must_use]
+    pub const fn with_hyperlink(mut self, url: Option<&'a Arc<str>>) -> Self {
+        self.hyperlink = url;
+        self
     }
 
     pub fn is_whitespace(&self) -> bool {
@@ -58,6 +75,14 @@ mod tests {
         let sg = StyledGrapheme::new("a", style);
         assert_eq!(sg.symbol, "a");
         assert_eq!(sg.style, style);
+    }
+
+    #[cfg(feature = "hyperlinks")]
+    #[test]
+    fn with_hyperlink() {
+        let url: Arc<str> = Arc::from("http://example.com");
+        let sg = StyledGrapheme::new("a", Style::default()).with_hyperlink(Some(&url));
+        assert_eq!(sg.hyperlink, Some(&url));
     }
 
     #[test]
