@@ -57,6 +57,10 @@ portable-atomic = ["kasuari/portable-atomic"]
 ## the Crossterm backend, and is not supported on Windows 7.
 underline-color = []
 
+## enables OSC 8 hyperlink support on cells, buffers, spans, lines, and text. Hyperlinks are
+## only emitted by the Crossterm backend. Other backends ignore them.
+hyperlinks = []
+
 ## Use terminal scrolling regions to make some operations less prone to
 ## flickering. (i.e. Terminal::insert_before).
 scrolling-regions = []
