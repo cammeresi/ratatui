@@ -1,6 +1,6 @@
 use color_eyre::Result;
 
-use crate::{CROSSTERM_VERSION_FEATURES, Run, run_cargo};
+use crate::{CROSSTERM_COMMON_FEATURES, CROSSTERM_VERSION_FEATURES, Run, run_cargo};
 
 /// Run clippy on the project
 #[derive(Clone, Debug, clap::Args)]
@@ -18,17 +18,7 @@ impl Run for Clippy {
             clippy_command.push("--fix");
         }
 
-        // Define common non-version-specific features for ratatui-crossterm. These will be enabled
-        // for both crossterm 0.28 and 0.29 runs. `underline-color`` is part of default, but with
-        // `--no-default-features``, we must add it.
-        let common_features = [
-            "serde",
-            "underline-color",
-            "scrolling-regions",
-            "unstable",
-            "unstable-backend-writer",
-        ]
-        .join(",");
+        let common_features = CROSSTERM_COMMON_FEATURES.join(",");
 
         let clippy_options = ["--", "-D", "warnings"];
 
