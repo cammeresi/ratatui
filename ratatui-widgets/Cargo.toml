@@ -29,6 +29,9 @@ std = ["serde?/std", "time?/local-offset"]
 ## This is useful if you want to save themes to a file.
 serde = ["dep:serde", "ratatui-core/serde"]
 
+## enables propagating OSC 8 hyperlinks through widget rendering (e.g. `Paragraph` wrapping).
+hyperlinks = ["ratatui-core/hyperlinks"]
+
 #! Widgets that add dependencies are gated behind feature flags to prevent unused transitive
 #! dependencies. The available features are:
 

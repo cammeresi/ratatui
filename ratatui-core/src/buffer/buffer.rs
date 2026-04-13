@@ -431,7 +431,7 @@ impl Buffer {
                 span.content.as_ref(),
                 remaining_width as usize,
                 line.style.patch(span.style),
-                None,
+                span.link(),
             );
             let w = pos.0.saturating_sub(x);
             x = pos.0;
@@ -442,7 +442,14 @@ impl Buffer {
 
     /// Print a span, starting at the position (x, y)
     pub fn set_span(&mut self, x: u16, y: u16, span: &Span<'_>, max_width: u16) -> (u16, u16) {
-        self.set_stringn_with_hyperlink(x, y, &span.content, max_width as usize, span.style, None)
+        self.set_stringn_with_hyperlink(
+            x,
+            y,
+            &span.content,
+            max_width as usize,
+            span.style,
+            span.link(),
+        )
     }
 
     /// Set the style of all cells in the given area.
@@ -1096,6 +1103,57 @@ mod tests {
             .collect_vec();
         assert_eq!(actual_contents, expected);
         assert_eq!(actual_styles, expected_styles);
+    }
+
+    #[cfg(feature = "hyperlinks")]
+    #[test]
+    fn set_span_hyperlink() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 5, 1));
+        let span = Span::raw("abc").hyperlink(Some("http://example.com"));
+        buf.set_span(0, 0, &span, 5);
+        for x in 0u16..3 {
+            let idx = buf.index_of(x, 0);
+            assert_eq!(buf.hyperlink(idx), Some("http://example.com"));
+        }
+        let idx = buf.index_of(3, 0);
+        assert_eq!(buf.hyperlink(idx), None);
+    }
+
+    #[cfg(feature = "hyperlinks")]
+    #[test]
+    fn set_line_hyperlink() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 1));
+        let line = Line::from(vec![
+            Span::raw("ab").hyperlink(Some("http://a.com")),
+            Span::raw("cd"),
+        ]);
+        buf.set_line(0, 0, &line, 6);
+        for x in 0u16..2 {
+            let idx = buf.index_of(x, 0);
+            assert_eq!(buf.hyperlink(idx), Some("http://a.com"));
+        }
+        for x in 2u16..4 {
+            let idx = buf.index_of(x, 0);
+            assert_eq!(buf.hyperlink(idx), None);
+        }
+    }
+
+    #[cfg(feature = "hyperlinks")]
+    #[test]
+    fn set_span_hyperlink_cjk() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 8, 1));
+        let span = Span::raw("a한국b").hyperlink(Some("http://example.com"));
+        buf.set_span(0, 0, &span, 8);
+        // primary cells: "a"=0, "한"=1, "국"=3, "b"=5
+        for x in [0, 1, 3, 5] {
+            let idx = buf.index_of(x, 0);
+            assert_eq!(buf.hyperlink(idx), Some("http://example.com"), "x={x}");
+        }
+        // trailing cells of wide chars are reset
+        for x in [2, 4, 6, 7] {
+            let idx = buf.index_of(x, 0);
+            assert_eq!(buf.hyperlink(idx), None, "x={x}");
+        }
     }
 
     #[test]
