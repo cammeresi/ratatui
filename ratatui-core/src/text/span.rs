@@ -1,11 +1,12 @@
 use alloc::borrow::Cow;
+use alloc::sync::Arc;
 use alloc::string::ToString;
 use core::fmt;
 
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::buffer::{Buffer, CellWidth};
+use crate::buffer::{Buffer, CellWidth, make_hyperlink};
 use crate::layout::Rect;
 use crate::style::{Style, Styled};
 use crate::text::{Line, StyledGrapheme};
@@ -101,6 +102,8 @@ pub struct Span<'a> {
     pub style: Style,
     /// The content of the span as a Clone-on-write string.
     pub content: Cow<'a, str>,
+    /// The hyperlink URL (OSC 8) for this span.
+    pub hyperlink: Option<Arc<str>>,
 }
 
 impl fmt::Debug for Span<'_> {
@@ -112,6 +115,9 @@ impl fmt::Debug for Span<'_> {
         }
         if self.style != Style::default() {
             self.style.fmt_stylize(f)?;
+        }
+        if let Some(ref url) = self.hyperlink {
+            write!(f, ".hyperlink({url:?})")?;
         }
         Ok(())
     }
@@ -135,6 +141,7 @@ impl<'a> Span<'a> {
         Self {
             content: content.into(),
             style: Style::default(),
+            hyperlink: None,
         }
     }
 
@@ -166,6 +173,7 @@ impl<'a> Span<'a> {
         Self {
             content: content.into(),
             style: style.into(),
+            hyperlink: None,
         }
     }
 
@@ -189,6 +197,32 @@ impl<'a> Span<'a> {
         T: Into<Cow<'a, str>>,
     {
         self.content = content.into();
+        self
+    }
+
+    /// Sets or clears the hyperlink URL (OSC 8) for this span.
+    ///
+    /// URLs containing control characters are silently rejected to prevent breaking terminal
+    /// escape sequences.
+    ///
+    /// Only the crossterm backend currently emits hyperlink sequences. The termion and termwiz
+    /// backends silently ignore hyperlinks.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use ratatui_core::text::Span;
+    ///
+    /// let span = Span::raw("click me").hyperlink(Some("https://example.com"));
+    /// let plain = Span::raw("plain text").hyperlink(None::<&str>);
+    /// ```
+    #[must_use = "method moves the value of self and returns the modified value"]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn hyperlink<U>(mut self, url: Option<U>) -> Self
+    where
+        U: AsRef<str>,
+    {
+        self.hyperlink = make_hyperlink(url.as_ref().map(AsRef::as_ref));
         self
     }
 
@@ -308,11 +342,16 @@ impl<'a> Span<'a> {
         base_style: S,
     ) -> impl Iterator<Item = StyledGrapheme<'a>> {
         let style = base_style.into().patch(self.style);
+        let hyperlink = self.hyperlink.as_ref();
         self.content
             .as_ref()
             .graphemes(true)
             .filter(|g| !g.contains(char::is_control))
-            .map(move |g| StyledGrapheme { symbol: g, style })
+            .map(move |g| StyledGrapheme {
+                symbol: g,
+                style,
+                hyperlink,
+            })
     }
 
     /// Converts this Span into a left-aligned [`Line`]
@@ -428,6 +467,7 @@ impl Widget for &Span<'_> {
             return;
         }
         let Rect { mut x, y, .. } = area;
+        let link = self.hyperlink.clone();
         for (i, grapheme) in self.styled_graphemes(Style::default()).enumerate() {
             let symbol_width = grapheme.symbol.cell_width();
             let next_x = x.saturating_add(symbol_width);
@@ -435,28 +475,28 @@ impl Widget for &Span<'_> {
                 break;
             }
 
+            // append zero-width graphemes to the previous cell
+            let cell_x = if symbol_width == 0 && i != 0 && x != area.x {
+                x - 1
+            } else {
+                x
+            };
             if i == 0 {
                 // the first grapheme is always set on the cell
-                buf[(x, y)]
-                    .set_symbol(grapheme.symbol)
-                    .set_style(grapheme.style);
+                buf[(cell_x, y)].set_symbol(grapheme.symbol);
             } else if x == area.x {
-                // there is one or more zero-width graphemes in the first cell, so the first cell
+                // there are one or more zero-width graphemes in the first cell, so the first cell
                 // must be appended to.
-                buf[(x, y)]
-                    .append_symbol(grapheme.symbol)
-                    .set_style(grapheme.style);
+                buf[(cell_x, y)].append_symbol(grapheme.symbol);
             } else if symbol_width == 0 {
-                // append zero-width graphemes to the previous cell
-                buf[(x - 1, y)]
-                    .append_symbol(grapheme.symbol)
-                    .set_style(grapheme.style);
+                buf[(cell_x, y)].append_symbol(grapheme.symbol);
             } else {
                 // just a normal grapheme (not first, not zero-width, not overflowing the area)
-                buf[(x, y)]
-                    .set_symbol(grapheme.symbol)
-                    .set_style(grapheme.style);
+                buf[(cell_x, y)].set_symbol(grapheme.symbol);
             }
+            let idx = buf.index_of(cell_x, y);
+            buf.content[idx].set_style(grapheme.style);
+            buf.content[idx].set_hyperlink_arc(link.clone());
 
             // multi-width graphemes must clear the cells of characters that are hidden by the
             // grapheme, otherwise the hidden characters will be re-rendered if the grapheme is
@@ -464,7 +504,8 @@ impl Widget for &Span<'_> {
             for x_hidden in (x + 1)..next_x {
                 // it may seem odd that the style of the hidden cells are not set to the style of
                 // the grapheme, but this is how the existing buffer.set_span() method works.
-                buf[(x_hidden, y)].reset();
+                let idx = buf.index_of(x_hidden, y);
+                buf.content[idx].reset();
             }
             x = next_x;
         }
@@ -684,6 +725,45 @@ mod tests {
         assert_eq!(line.alignment, Some(Alignment::Right));
     }
 
+    #[test]
+    fn hyperlink() {
+        let span = Span::raw("x").hyperlink(Some("http://example.com"));
+        assert_eq!(span.hyperlink.as_deref(), Some("http://example.com"));
+    }
+
+    #[test]
+    fn hyperlink_empty() {
+        let span = Span::raw("x").hyperlink(Some(""));
+        assert_eq!(span.hyperlink, None);
+    }
+
+    #[test]
+    fn hyperlink_rejects_unsafe_bytes() {
+        for url in ["http://\x1b]evil", "http://\x07bel", "http://\x00nul"] {
+            let span = Span::raw("x").hyperlink(Some(url));
+            assert_eq!(span.hyperlink, None, "should reject {url:?}");
+        }
+    }
+
+    #[test]
+    fn hyperlink_cleared_with_none() {
+        let span = Span::raw("x")
+            .hyperlink(Some("http://example.com"))
+            .hyperlink(None::<&str>);
+        assert_eq!(span.hyperlink, None);
+    }
+
+    #[test]
+    fn styled_graphemes_hyperlink() {
+        let url = "http://example.com";
+        let span = Span::raw("abc").hyperlink(Some(url));
+        let link = span.hyperlink.as_ref();
+        assert!(
+            span.styled_graphemes(Style::default())
+                .all(|g| g.hyperlink == link)
+        );
+    }
+
     mod widget {
         use rstest::rstest;
 
@@ -841,6 +921,30 @@ mod tests {
             let mut buf = Buffer::empty(Rect::new(0, 0, 2, 1));
             span.render(buf.area, &mut buf);
             assert_eq!(buf.content(), [Cell::new("a"), Cell::new("b")]);
+        }
+
+        #[test]
+        fn render_hyperlink() {
+            let url = "http://example.com";
+            let span = Span::raw("abc").hyperlink(Some(url));
+            let mut buf = Buffer::empty(Rect::new(0, 0, 3, 1));
+            span.render(buf.area, &mut buf);
+            for i in 0..3 {
+                assert_eq!(buf.hyperlink(i), Some(url));
+            }
+        }
+
+        #[test]
+        fn render_hyperlink_cjk() {
+            let url = "http://example.com";
+            let span = Span::raw("a한국b").hyperlink(Some(url));
+            let mut buf = Buffer::empty(Rect::new(0, 0, 8, 1));
+            span.render(buf.area, &mut buf);
+            // primary cells: "a"=0, "한"=1, "국"=3, "b"=5
+            for x in [0, 1, 3, 5] {
+                let idx = buf.index_of(x, 0);
+                assert_eq!(buf.hyperlink(idx), Some(url), "x={x}");
+            }
         }
     }
 

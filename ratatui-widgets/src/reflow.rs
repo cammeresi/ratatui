@@ -292,7 +292,12 @@ where
             lines_exhausted = false;
             current_alignment = *alignment;
 
-            for StyledGrapheme { symbol, style } in current_line {
+            for StyledGrapheme {
+                symbol,
+                style,
+                hyperlink,
+            } in current_line
+            {
                 // Ignore characters wider that the total max width.
                 if symbol.cell_width() > self.max_line_width {
                     continue;
@@ -317,7 +322,11 @@ where
                     }
                 };
                 current_line_width += symbol.cell_width();
-                self.current_line.push(StyledGrapheme { symbol, style });
+                self.current_line.push(StyledGrapheme {
+                    symbol,
+                    style,
+                    hyperlink,
+                });
             }
         }
 

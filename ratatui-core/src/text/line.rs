@@ -805,11 +805,9 @@ fn spans_after_width<'a>(
             // that takes that into account by indenting the start of the area
             let first_grapheme_offset = available_width.saturating_sub(actual_width);
             let first_grapheme_offset = u16::try_from(first_grapheme_offset).unwrap_or(u16::MAX);
-            (
-                Span::styled(content, span.style),
-                actual_width,
-                first_grapheme_offset,
-            )
+            let mut truncated = Span::styled(content, span.style);
+            truncated.hyperlink.clone_from(&span.hyperlink);
+            (truncated, actual_width, first_grapheme_offset)
         })
 }
 
@@ -1364,6 +1362,20 @@ mod tests {
                 .centered()
                 .render(buf.area, &mut buf);
             assert_eq!(buf, Buffer::with_lines(["lo wo"]));
+        }
+
+        #[test]
+        fn render_truncated_preserves_hyperlink() {
+            let url = "http://example.com";
+            let line =
+                Line::from(vec![Span::raw("Hello world").hyperlink(Some(url))]).right_aligned();
+            let mut buf = Buffer::empty(Rect::new(0, 0, 5, 1));
+            line.render(buf.area, &mut buf);
+            let mut expected = Buffer::with_lines(["world"]);
+            let start = expected.index_of(0, 0);
+            let end = expected.index_of(4, 0) + 1;
+            expected.set_hyperlink(start..end, Some(url));
+            assert_eq!(buf, expected);
         }
 
         /// Part of a regression test for <https://github.com/ratatui/ratatui/issues/1032> which

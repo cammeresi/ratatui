@@ -1,5 +1,7 @@
 //! The [`Paragraph`] widget and related types allows displaying a block of text with optional
 //! wrapping, alignment, and block styling.
+use alloc::sync::Arc;
+
 use ratatui_core::buffer::{Buffer, CellWidth};
 use ratatui_core::layout::{Alignment, Position, Rect};
 use ratatui_core::style::{Style, Styled};
@@ -460,15 +462,20 @@ fn render_lines<'a, C: LineComposer<'a>>(mut composer: C, area: Rect, buf: &mut 
 
 fn render_line(wrapped: &WrappedLine<'_, '_>, area: Rect, buf: &mut Buffer, y: u16) {
     let mut x = get_line_offset(wrapped.width, area.width, wrapped.alignment);
-    for StyledGrapheme { symbol, style } in wrapped.graphemes {
+    for StyledGrapheme {
+        symbol,
+        style,
+        hyperlink,
+    } in wrapped.graphemes
+    {
         let width = symbol.cell_width();
         if width == 0 {
             continue;
         }
-        // Make sure to overwrite any previous character with a space (rather than a zero-width)
         let symbol = if symbol.is_empty() { " " } else { symbol };
         let position = Position::new(area.left() + x, area.top() + y);
         buf[position].set_symbol(symbol).set_style(*style);
+        buf[position].set_hyperlink_arc(hyperlink.map(Arc::clone));
         x += width;
     }
 }
@@ -1257,5 +1264,44 @@ mod tests {
         let paragraph = Paragraph::new("Lorem ipsum");
         // This should not panic, even if the buffer has zero size.
         paragraph.render(buffer.area, &mut buffer);
+    }
+
+    #[test]
+    fn hyperlink_wrap() {
+        let url = "http://example.com";
+        let p = Paragraph::new(Line::from(Span::raw("abcdef").hyperlink(Some(url))))
+            .wrap(Wrap { trim: false });
+        let mut buf = Buffer::empty(Rect::new(0, 0, 3, 2));
+        p.render(buf.area, &mut buf);
+        for x in 0..3 {
+            for y in 0..2 {
+                let idx = buf.index_of(x, y);
+                assert_eq!(buf.hyperlink(idx), Some(url), "({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn hyperlink_truncate() {
+        let url = "http://example.com";
+        let p = Paragraph::new(Line::from(Span::raw("abcdef").hyperlink(Some(url))));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+        p.render(buf.area, &mut buf);
+        for x in 0..4 {
+            let idx = buf.index_of(x, 0);
+            assert_eq!(buf.hyperlink(idx), Some(url), "x={x}");
+        }
+    }
+
+    #[test]
+    fn hyperlink_scroll() {
+        let url = "http://example.com";
+        let p = Paragraph::new(Line::from(Span::raw("abcdef").hyperlink(Some(url)))).scroll((0, 2));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+        p.render(buf.area, &mut buf);
+        for x in 0..4 {
+            let idx = buf.index_of(x, 0);
+            assert_eq!(buf.hyperlink(idx), Some(url), "x={x}");
+        }
     }
 }
