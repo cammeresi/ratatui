@@ -1,3 +1,5 @@
+#[cfg(feature = "hyperlinks")]
+use alloc::sync::Arc;
 use core::num::NonZeroU16;
 
 use compact_str::CompactString;
@@ -5,6 +7,38 @@ use compact_str::CompactString;
 use crate::buffer::cell_width::CellWidth;
 use crate::style::{Color, Modifier, Style};
 use crate::symbols::merge::MergeStrategy;
+
+#[cfg(feature = "hyperlinks")]
+const MAX_HYPERLINK_LEN: usize = 4096;
+
+/// Returns true if the byte sequence contains characters that could break OSC 8 hyperlink framing.
+///
+/// Rejects C0 controls (0x00–0x1F), DEL (0x7F), and C1 controls (U+0080–U+009F).
+/// C1 controls encode in UTF-8 as 0xC2 0x80–0xC2 0x9F.
+#[cfg(feature = "hyperlinks")]
+fn has_osc8_unsafe(s: &str) -> bool {
+    let b = s.as_bytes();
+    let len = b.len();
+    let mut i = 0;
+    while i < len {
+        let byte = b[i];
+        if byte <= 0x1F || byte == 0x7F {
+            return true;
+        }
+        if byte == 0xC2 && i + 1 < len && b[i + 1] <= 0x9F {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Validates and wraps a URL for use as an OSC 8 hyperlink.
+#[cfg(feature = "hyperlinks")]
+pub(crate) fn make_hyperlink(url: Option<&str>) -> Option<Arc<str>> {
+    url.filter(|u| !u.is_empty() && u.len() <= MAX_HYPERLINK_LEN && !has_osc8_unsafe(u))
+        .map(Arc::from)
+}
 
 /// Cell diffing options
 #[derive(Debug, Default, Clone, Eq, PartialEq, Hash, Copy)]
@@ -61,6 +95,19 @@ pub struct Cell {
     /// Special option applied when copying (diffing) the buffer to the screen (or another buffer).
     pub diff_option: CellDiffOption,
 
+    /// The hyperlink URL (OSC 8) for this cell, if any.
+    #[cfg(feature = "hyperlinks")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "crate::buffer::cell::serde_arc_str::serialize",
+            deserialize_with = "crate::buffer::cell::serde_arc_str::deserialize"
+        )
+    )]
+    hyperlink: Option<Arc<str>>,
+
     /// Whether the cell should be skipped when copying (diffing) the buffer to the screen.
     ///
     /// Use [`CellDiffOption::Skip`] via [`set_diff_option`](Self::set_diff_option) instead.
@@ -82,6 +129,8 @@ impl Cell {
         underline_color: Color::Reset,
         modifier: Modifier::empty(),
         diff_option: CellDiffOption::None,
+        #[cfg(feature = "hyperlinks")]
+        hyperlink: None,
         skip: false,
     };
 
@@ -243,6 +292,26 @@ impl Cell {
         self
     }
 
+    /// Gets the hyperlink URL for this cell.
+    #[cfg(feature = "hyperlinks")]
+    #[must_use]
+    pub fn hyperlink(&self) -> Option<&str> {
+        self.hyperlink.as_deref()
+    }
+
+    /// Sets the hyperlink URL for this cell, filtering out unsafe bytes.
+    #[cfg(feature = "hyperlinks")]
+    pub fn set_hyperlink(&mut self, url: Option<&str>) -> &mut Self {
+        self.hyperlink = make_hyperlink(url);
+        self
+    }
+
+    /// Sets the hyperlink from a pre-built `Arc<str>`, avoiding per-cell allocation.
+    #[cfg(feature = "hyperlinks")]
+    pub fn set_hyperlink_arc(&mut self, url: Option<Arc<str>>) {
+        self.hyperlink = url;
+    }
+
     /// Resets the cell to the empty state.
     #[allow(deprecated)]
     pub fn reset(&mut self) {
@@ -265,11 +334,21 @@ impl PartialEq for Cell {
         #[cfg(not(feature = "underline-color"))]
         let underline_color_eq = true;
 
+        #[cfg(feature = "hyperlinks")]
+        let hyperlink_eq = match (&self.hyperlink, &other.hyperlink) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b) || *a == *b,
+            (None, None) => true,
+            _ => false,
+        };
+        #[cfg(not(feature = "hyperlinks"))]
+        let hyperlink_eq = true;
+
         #[allow(deprecated)]
         let skip_eq = self.skip == other.skip;
 
         symbols_eq
             && underline_color_eq
+            && hyperlink_eq
             && skip_eq
             && self.fg == other.fg
             && self.bg == other.bg
@@ -293,6 +372,8 @@ impl core::hash::Hash for Cell {
         self.underline_color.hash(state);
         self.modifier.hash(state);
         self.diff_option.hash(state);
+        #[cfg(feature = "hyperlinks")]
+        self.hyperlink().hash(state);
         #[allow(deprecated)]
         self.skip.hash(state);
     }
@@ -317,6 +398,32 @@ impl CellWidth for Cell {
     }
 }
 
+#[cfg(all(feature = "serde", feature = "hyperlinks"))]
+mod serde_arc_str {
+    use alloc::sync::Arc;
+
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    #[allow(clippy::ref_option)]
+    pub fn serialize<S>(val: &Option<Arc<str>>, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match val {
+            Some(rc) => s.serialize_some(&**rc),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(d: D) -> Result<Option<Arc<str>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt: Option<alloc::string::String> = Option::deserialize(d)?;
+        Ok(opt.and_then(|s| super::make_hyperlink(Some(s.as_str()))))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,6 +442,8 @@ mod tests {
                 underline_color: Color::Reset,
                 modifier: Modifier::empty(),
                 diff_option: CellDiffOption::None,
+                #[cfg(feature = "hyperlinks")]
+                hyperlink: None,
                 skip: false,
             }
         );
@@ -454,5 +563,86 @@ mod tests {
         let cell1 = Cell::new("あ");
         let cell2 = Cell::new("い");
         assert_ne!(cell1, cell2);
+    }
+
+    #[cfg(feature = "hyperlinks")]
+    #[test]
+    fn set_hyperlink_valid() {
+        let mut cell = Cell::EMPTY;
+        cell.set_hyperlink(Some("https://example.com"));
+        assert_eq!(cell.hyperlink(), Some("https://example.com"));
+    }
+
+    #[cfg(feature = "hyperlinks")]
+    #[test]
+    fn set_hyperlink_empty() {
+        let mut cell = Cell::EMPTY;
+        cell.set_hyperlink(Some(""));
+        assert_eq!(cell.hyperlink(), None);
+    }
+
+    #[cfg(feature = "hyperlinks")]
+    #[test]
+    fn set_hyperlink_control_chars() {
+        let mut cell = Cell::EMPTY;
+        for url in ["http://\x1b]evil", "http://\x07bel", "http://\x00nul"] {
+            cell.set_hyperlink(Some(url));
+            assert_eq!(cell.hyperlink(), None, "should reject {url:?}");
+        }
+    }
+
+    #[cfg(feature = "hyperlinks")]
+    #[test]
+    fn set_hyperlink_overlength() {
+        let mut cell = Cell::EMPTY;
+        let long = "x".repeat(MAX_HYPERLINK_LEN + 1);
+        cell.set_hyperlink(Some(long.as_str()));
+        assert_eq!(cell.hyperlink(), None);
+    }
+
+    #[cfg(feature = "hyperlinks")]
+    #[test]
+    fn set_hyperlink_none_clears() {
+        let mut cell = Cell::EMPTY;
+        cell.set_hyperlink(Some("https://example.com"));
+        cell.set_hyperlink(None);
+        assert_eq!(cell.hyperlink(), None);
+    }
+
+    #[cfg(feature = "hyperlinks")]
+    #[test]
+    fn make_hyperlink_valid() {
+        let link = make_hyperlink(Some("https://example.com"));
+        assert_eq!(link.as_deref(), Some("https://example.com"));
+    }
+
+    #[cfg(feature = "hyperlinks")]
+    #[test]
+    fn make_hyperlink_empty() {
+        assert_eq!(make_hyperlink(Some("")), None);
+    }
+
+    #[cfg(feature = "hyperlinks")]
+    #[test]
+    fn make_hyperlink_none() {
+        assert_eq!(make_hyperlink(None), None);
+    }
+
+    #[cfg(feature = "hyperlinks")]
+    #[test]
+    fn make_hyperlink_control_chars() {
+        assert_eq!(make_hyperlink(Some("http://\x1b]evil")), None);
+        assert_eq!(make_hyperlink(Some("\x00start")), None);
+        // C1 control U+0080
+        assert_eq!(make_hyperlink(Some("http://\u{0080}bad")), None);
+    }
+
+    #[cfg(feature = "hyperlinks")]
+    #[test]
+    fn make_hyperlink_overlength() {
+        let long = "x".repeat(MAX_HYPERLINK_LEN + 1);
+        assert_eq!(make_hyperlink(Some(&long)), None);
+        let exact = "x".repeat(MAX_HYPERLINK_LEN);
+        assert!(make_hyperlink(Some(&exact)).is_some());
     }
 }
