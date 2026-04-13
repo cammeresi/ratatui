@@ -11,6 +11,13 @@
 //! [`Backend`]: trait.Backend.html
 //! [Termwiz]: https://crates.io/crates/termwiz
 //!
+//! # Limitations
+//!
+//! Hyperlinks (OSC 8) are not supported by this backend. Hyperlink data on [`Cell`]s is silently
+//! ignored during rendering.
+//!
+//! [`Cell`]: ratatui_core::buffer::Cell
+//!
 //! # Crate Organization
 //!
 //! `ratatui-termwiz` is part of the Ratatui workspace that was modularized in version 0.30.0.

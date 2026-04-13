@@ -74,6 +74,8 @@ use crossterm::style::{
     Colors as CrosstermColors, ContentStyle, Print, SetAttribute, SetBackgroundColor, SetColors,
     SetForegroundColor,
 };
+#[cfg(feature = "crossterm_0_29")]
+use crossterm::style::{EndHyperlink, StartHyperlink};
 use crossterm::terminal::{self, Clear};
 use crossterm::{execute, queue};
 cfg_if::cfg_if! {
@@ -231,6 +233,7 @@ where
         #[cfg(feature = "underline-color")]
         let mut underline_color = Color::Reset;
         let mut modifier = Modifier::empty();
+        let mut hyperlink = HyperlinkState::new();
         let mut last_pos: Option<Position> = None;
         for (x, y, cell) in content {
             // Move the cursor if the previous location was not (x - 1, y)
@@ -264,8 +267,12 @@ where
                 underline_color = cell.underline_color;
             }
 
+            hyperlink.update(cell, &mut self.writer)?;
+
             queue!(self.writer, Print(cell.symbol()))?;
         }
+
+        hyperlink.end(&mut self.writer)?;
 
         #[cfg(feature = "underline-color")]
         return queue!(
@@ -519,6 +526,76 @@ impl FromCrossterm<CrosstermColor> for Color {
             CrosstermColor::Rgb { r, g, b } => Self::Rgb(r, g, b),
             CrosstermColor::AnsiValue(v) => Self::Indexed(v),
         }
+    }
+}
+
+#[cfg(feature = "crossterm_0_29")]
+struct HyperlinkState<'a> {
+    active: Option<&'a str>,
+}
+
+#[cfg(feature = "crossterm_0_29")]
+impl<'a> HyperlinkState<'a> {
+    const fn new() -> Self {
+        Self { active: None }
+    }
+
+    fn update<W>(&mut self, cell: &'a Cell, w: &mut W) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        let link = cell.hyperlink();
+        if link != self.active {
+            if self.active.is_some() {
+                queue!(w, EndHyperlink)?;
+            }
+            if let Some(url) = link {
+                queue!(w, StartHyperlink::new(url))?;
+            }
+            self.active = link;
+        }
+        Ok(())
+    }
+
+    fn end<W>(&mut self, w: &mut W) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        if self.active.is_some() {
+            queue!(w, EndHyperlink)?;
+            self.active = None;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(feature = "crossterm_0_29"))]
+struct HyperlinkState;
+
+#[cfg(not(feature = "crossterm_0_29"))]
+#[allow(
+    clippy::unused_self,
+    clippy::unnecessary_wraps,
+    clippy::missing_const_for_fn,
+    clippy::needless_pass_by_ref_mut
+)]
+impl HyperlinkState {
+    const fn new() -> Self {
+        Self
+    }
+
+    fn update<W>(&mut self, _cell: &Cell, _w: &mut W) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        Ok(())
+    }
+
+    fn end<W>(&mut self, _w: &mut W) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        Ok(())
     }
 }
 
@@ -1160,5 +1237,41 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(style.into_crossterm(), content_style);
+    }
+
+    /// A CJK hyperlink spanning multiple wide characters should emit exactly
+    /// one `StartHyperlink` and one `EndHyperlink`, with no internal end/start
+    /// pairs caused by trailing cells.
+    #[test]
+    #[cfg(feature = "crossterm_0_29")]
+    fn draw_cjk_hyperlink_single_sequence() {
+        let url = "http://example.com";
+        let start = format!("\x1b]8;;{url}\x1b\\");
+        let end = "\x1b]8;;\x1b\\";
+
+        let mut a = Cell::EMPTY;
+        a.set_symbol("한");
+        a.set_hyperlink(Some(url));
+
+        let mut b = Cell::EMPTY;
+        b.set_symbol("국");
+        b.set_hyperlink(Some(url));
+
+        let mut buf = Vec::new();
+        let mut backend = CrosstermBackend::new(&mut buf);
+        // "한" at col 0 (width 2), "국" at col 2 (width 2)
+        backend.draw([(0, 0, &a), (2, 0, &b)].into_iter()).unwrap();
+
+        let output = String::from_utf8_lossy(&buf);
+        assert_eq!(
+            output.matches(&start).count(),
+            1,
+            "expected exactly one StartHyperlink: {output:?}"
+        );
+        assert_eq!(
+            output.matches(end).count(),
+            1,
+            "expected exactly one EndHyperlink: {output:?}"
+        );
     }
 }

@@ -160,9 +160,9 @@ pub trait Backend {
 
     /// Draw the given content to the terminal screen.
     ///
-    /// The content is provided as an iterator over `(u16, u16, &Cell)` tuples, where the first two
-    /// elements represent the x and y coordinates, and the third element is a reference to the
-    /// [`Cell`] to be drawn.
+    /// The content is provided as an iterator over `(u16, u16, &Cell)` tuples,
+    /// where the first two elements represent the x and y coordinates and the third element is a
+    /// reference to the [`Cell`] to be drawn.
     fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>;

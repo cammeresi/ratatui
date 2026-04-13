@@ -35,7 +35,7 @@ color-eyre = "0.6"
 compact_str = { version = "0.9", default-features = false }
 criterion = { version = "0.8", features = ["html_reports"] }
 critical-section = "1.2"
-crossterm = "0.29"
+crossterm = { git = "https://github.com/crossterm-rs/crossterm.git", rev = "ccf7075" }
 document-features = "0.2"
 fakeit = "1"
 futures = "0.3"

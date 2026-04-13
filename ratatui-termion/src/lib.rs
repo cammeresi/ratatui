@@ -11,6 +11,13 @@
 //! [`Backend`]: ratatui_core::backend::Backend
 //! [Termion]: https://docs.rs/termion
 //!
+//! # Limitations
+//!
+//! Hyperlinks (OSC 8) are not supported by this backend. Hyperlink data on [`Cell`]s is silently
+//! ignored during rendering.
+//!
+//! [`Cell`]: ratatui_core::buffer::Cell
+//!
 //! # Crate Organization
 //!
 //! `ratatui-termion` is part of the Ratatui workspace that was modularized in version 0.30.0.
